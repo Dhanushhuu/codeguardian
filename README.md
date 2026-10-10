@@ -1,221 +1,138 @@
-<div align="center">
+# CodeGuardian
 
-# 🛡️ CodeGuardian
+A multi-agent code review system that scans Python and JavaScript/TypeScript for security and quality issues, triages the findings with an LLM, proposes fixes, and reports back through a web UI, GitHub pull-request comments, and a PDF audit report.
 
-### Autonomous Code Security & Quality Review Agent
+![LangGraph](https://img.shields.io/badge/Orchestration-LangGraph-blue) ![FastAPI](https://img.shields.io/badge/API-FastAPI-green) ![License](https://img.shields.io/badge/License-MIT-lightgrey)
 
-[![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![LangGraph](https://img.shields.io/badge/LangGraph-0.2-FF6B35?style=for-the-badge&logo=langchain&logoColor=white)](https://langchain.com)
-[![React](https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev)
-[![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
-[![Cost](https://img.shields.io/badge/Total%20Cost-$0-brightgreen?style=for-the-badge)](.)
-
-<br/>
-
-> **Submit a Pull Request — CodeGuardian scans it with 3 detection layers running in parallel,
-> generates validated code fixes, writes missing tests, and posts a structured security report
-> directly on your PR. Automatically. In ~40 seconds.**
-
-<br/>
-
-Built by **Dhanush Kumar** · Final Year B.E. (AIML) · 2026
-
-</div>
+> **Status.** This is a student project built to learn and demonstrate multi-agent system design. The detection layers have been measured on a small labelled benchmark (see [Results](#results)); some components have not been evaluated yet (see [Component status](#component-status)). Read [EVALUATION.md](EVALUATION.md) before drawing conclusions about accuracy.
 
 ---
 
-## 📋 Table of Contents
-
-- [What It Does](#-what-it-does)
-- [How It Works](#-how-it-works)
-- [Detection Layers](#-detection-layers)
-- [Why CodeGuardian](#-why-codeguardian)
-- [Real Results](#-real-results)
-- [Quick Start](#-quick-start)
-- [API Reference](#-api-reference)
-- [Tech Stack](#-tech-stack)
-- [Project Structure](#-project-structure)
-
----
-
-## 🎯 What It Does
-
-CodeGuardian is a **production-grade multi-agent AI system** that automates the entire code security review process. When a developer opens a Pull Request, CodeGuardian:
-
-1. **Detects vulnerabilities** using 3 parallel scanning layers (static analysis + ML + LLM)
-2. **Filters false positives** using an LLM that explains why each finding is real or noise
-3. **Generates code fixes** with category-specific templates, validated with `ast.parse()`
-4. **Writes unit tests** covering the fixed functions, targeting the exact vulnerabilities found
-5. **Posts a structured report** directly as a GitHub PR comment with verdict, severity breakdown, and collapsible issue details
-6. **Generates a PDF report** for documentation and audit trails
-
----
-
-## ⚙️ How It Works
+## How it works
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    GitHub Pull Request                       │
-└─────────────────────────┬───────────────────────────────────┘
-                          │ webhook
-                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│                     PARSER AGENT                            │
-│         Language detection · AST extraction                  │
-│         Function-level code unit isolation                   │
-└──────────────────┬──────────────────────────────────────────┘
-                   │
-        ┌──────────┴──────────┐
-        │   LangGraph fan-out  │  ← runs in parallel
-        ▼                     ▼
-┌───────────────┐    ┌─────────────────┐
-│ SECURITY      │    │ QUALITY AGENT   │
-│ AGENT         │    │                 │
-│               │    │ · Radon CC/MI   │
-│ · Bandit      │    │ · AST checks    │
-│   68 checks   │    │   - Long funcs  │
-│ · Semgrep     │    │   - Deep nesting│
-│   1000+ rules │    │   - Missing docs│
-│ · CodeBERT    │    │ · LLM review    │
-│   ML model    │    │   - Naming      │
-│ · LLM enrich  │    │   - SRP         │
-│   FP filter   │    │   - Duplication │
-└───────┬───────┘    └────────┬────────┘
-        └──────────┬──────────┘
-                   │ merged results
-                   ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      FIX AGENT                              │
-│   Category-specific fix templates · ast.parse() validation  │
-│   SQL injection → parameterized queries                      │
-│   Shell injection → list args, no shell=True                 │
-│   Hardcoded secrets → os.getenv()                            │
-│   Weak crypto → SHA-256 / bcrypt                             │
-└─────────────────────────────────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   TEST WRITER AGENT                         │
-│   pytest (Python) · jest (JS/TS)                            │
-│   Happy path + edge cases + security regression tests        │
-└─────────────────────────────────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    REVIEWER AGENT                           │
-│   Verdict · GitHub PR comment · PDF report                  │
-└─────────────────────────────────────────────────────────────┘
+Source files / PR diff
+        │
+        ▼
+     Parser
+        │
+        ▼   LangGraph fan-out (parallel)
+   ┌────┴─────────────┐
+   ▼                  ▼
+Security agent    Quality agent
+   │
+   │  files processed concurrently
+   │  (ThreadPoolExecutor, 4 workers)
+   │  per file, in order:  Bandit → Semgrep → CodeBERT (optional)
+   ▼
+LLM triage (LLaMA 3.3 70B via Groq) → Fix agent → Report / PR comment / PDF
 ```
+<!-- VERIFY: confirm the order of stages after the fan-out (triage, fix, test generation, report) against the LangGraph definition. -->
+
+Key design points:
+
+- **Parallelism is at two levels.** After parsing, LangGraph runs the Security and Quality agents in parallel. Inside the Security agent, a thread pool processes multiple files concurrently. The detection layers themselves (Bandit, Semgrep, CodeBERT) run **sequentially** on each file.
+- **Rule-based tools carry the findings.** Bandit and Semgrep provide the precision-oriented results.
+- **LLM triage** (LLaMA 3.3 70B on Groq) reviews findings, explains exploitability, and can flag additional issues.
+- **Fix agent** generates category-specific fixes (for example SQL injection to parameterized queries, hardcoded secrets to environment variables) and checks that each patch still parses with Python's `ast` module.
+- **GitHub integration:** webhook intake, PR review comments, and a PDF audit report.
 
 ---
 
-## 🔍 Detection Layers
+## Component status
 
-| # | Layer | Tool | What It Catches |
+| Component | Status |
+|---|---|
+| Bandit + Semgrep detection | Implemented; measured on a 48-snippet Python benchmark ([results](#results)) |
+| CodeBERT classifier | Fine-tuned and measured; **shown not to transfer to Python**, so it is off by default ([details](#codebert-classifier)) |
+| LLM triage | Implemented; **not yet evaluated** (no measured false-positive dismissal rate; not tested against prompt injection in code comments) |
+| Fix agent | Implemented; patches are checked for **syntax only** (`ast.parse`); re-scanning patched code is not yet part of the pipeline |
+| Test generation (pytest / jest) | Implemented; **not yet evaluated** |
+| GitHub webhook, PR comments, PDF report | Implemented |
+| Quality agent | Implemented; not part of the evaluation so far |
+<!-- VERIFY: confirm each "Implemented" line against the code and a working demo before publishing. -->
+
+---
+
+## Results
+
+On a hand-written benchmark of **48 Python snippets** (24 vulnerable, 24 matched safe versions), all severities reported:
+
+| Configuration | Precision | Recall | False-positive rate |
 |---|---|---|---|
-| 1 | **Static Analysis** | Bandit | 68 Python checks — SQL injection (CWE-89), shell injection (CWE-78), hardcoded passwords (CWE-259), weak crypto (CWE-327), insecure deserialization (CWE-502) |
-| 2 | **Pattern Matching** | Semgrep | 1000+ community rules — Python, JavaScript, TypeScript, JSX, TSX. Custom YAML rules supported. |
-| 3 | **ML Classification** | CodeBERT | Function-level binary classifier fine-tuned on CodeXGLUE Defect Detection (Devign dataset). Catches contextual/logic-level vulnerabilities static tools miss. |
-| 4 | **LLM Enrichment** | LLaMA 3.3 70B | Reviews all scanner findings, dismisses false positives with explanation, adds exploitation context, surfaces issues scanners missed. |
+| Bandit only | 85% | 71% | 12% |
+| Bandit + Semgrep | 86% | 75% | 12% |
+| Bandit + Semgrep + CodeBERT | 50% | 100% | 100% |
+| CodeBERT alone | 50% | 100% | 100% |
+
+- Bandit and Semgrep catch all 17 pattern-style cases (SQL injection, `shell=True`, pickle and similar) but almost none of the 7 semantic ones (missing authorization, IDOR, SSRF and similar): 0 of 7 for Bandit, 1 of 7 with Semgrep added.
+- CodeBERT flagged **every** snippet, so adding it made the ensemble worse.
+- The benchmark is small and hand-written, and it favours rule-based tools on pattern-style cases. Treat it as a smoke test, not a benchmark. Full tables, confidence intervals, and caveats are in [EVALUATION.md](EVALUATION.md).
+- The end-to-end pipeline (including LLM triage and fixes) has **not** been scored yet; those cells are marked TBD in [EVALUATION.md](EVALUATION.md).
 
 ---
 
-## 🏆 Why CodeGuardian
+## CodeBERT classifier
 
-| Feature | GitHub Copilot | SonarQube | **CodeGuardian** |
-|---|---|---|---|
-| Multi-layer detection | ❌ | Partial | ✅ Bandit + Semgrep + CodeBERT |
-| Fine-tuned ML classifier | ❌ | ❌ | ✅ CodeBERT on CodeXGLUE |
-| Auto-generated fixes | ❌ | ❌ | ✅ Syntax validated |
-| Auto-generated tests | ❌ | ❌ | ✅ pytest + jest |
-| LLM false positive filtering | ❌ | ❌ | ✅ Explains every dismissal |
-| Parallel agent execution | ❌ | ❌ | ✅ LangGraph fan-out |
-| Posts PR comment | ✅ | ❌ | ✅ Structured markdown |
-| PDF audit report | ❌ | Paid | ✅ Free |
-| **Total cost** | **Paid** | **Paid** | **$0** |
+CodeBERT was fine-tuned as a binary vulnerability classifier on CodeXGLUE Defect Detection (Devign: 21,854 training functions, **written in C**).
 
----
+| Item | Value |
+|---|---|
+| Setup | 3 epochs, batch size 8, learning rate 2e-5, max length 512, fp16, seed 42 |
+| Model selection | Best checkpoint by validation F1; the test set was evaluated once at the end |
+| Test accuracy | 61.5% (majority-class baseline 54.1%) |
+| Test F1 / precision / recall | 0.578 / 0.582 / 0.574 |
+| Script | [`finetuning/train_codebert_fixed.py`](finetuning/train_codebert_fixed.py) |
+| Raw results | [`finetuning/results/eval_results.json`](finetuning/results/eval_results.json) |
 
-## 📊 Real Results
+These C-language figures are in line with commonly reported CodeBERT results on this noisy benchmark: a weak signal, about 7 points above always guessing "safe".
 
-Tested on `data/samples/vulnerable_example.py` — 9 deliberate vulnerabilities:
+**Transfer to Python.** Because CodeGuardian scans Python and JS/TS, the model was also tested on the Python benchmark above. It assigned P(vulnerable) ≈ 0.998 to every snippet (ROC-AUC 0.544, false-positive rate 100%). Two control experiments confirm this is a domain effect and not a bug: on 300 Devign test functions (C) the same inference code gives 63.7% accuracy and flags 46% of functions, while on 148 long, real Python standard-library functions it returns 0.998 for every single one. It is therefore **not counted as a detector** and is disabled by default.
+<!-- VERIFY: make sure USE_FINETUNED_MODEL defaults to false in the code and that CodeBERT output is excluded from reported findings when it is off. -->
 
-```
-CODEGUARDIAN REPORT
-════════════════════════════════════════════════════
-Verdict  : REQUEST_CHANGES
-Summary  : Found 24 security issue(s) and 18 quality issue(s)
-           across 1 file(s). 0 false positive(s) dismissed.
-           10 fix(es) and 0 test file(s) generated.
-
-Severity Breakdown:
-  🔴 Critical : 0
-  🟠 High     : 13
-  🟡 Medium   : 7
-  🔵 Low      : 4
-
-Issues Detected:
-  [HIGH  ] Subprocess Popen With Shell Equals True (line 24) [bandit]
-  [HIGH  ] Request With No Cert Validation        (line 68) [bandit]
-  [HIGH  ] Start Process With A Shell             (line 75) [bandit]
-  [HIGH  ] Subprocess Shell True                  (line 24) [semgrep]
-  [HIGH  ] Shell Injection                        (line 24) [codebert]
-  [HIGH  ] Insecure Deserialization               (line 40) [codebert]
-  [HIGH  ] Arbitrary Code Execution               (line 52) [codebert]
-  [HIGH  ] TLS Verification Disabled              (line 65) [codebert]
-  [HIGH  ] Insecure API Key Storage               (line 20) [llm]
-
-Detection Rate : 9/9 vulnerabilities found = 100%
-Pipeline Time  : ~40 seconds end-to-end
-Fix Validation : 9/10 fixes passed ast.parse()
-════════════════════════════════════════════════════
-```
-
----
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-- Python 3.10+
-- Node.js 18+ (frontend only)
-- [Groq API key](https://console.groq.com) (free)
-- [GitHub Token](https://github.com/settings/tokens) (free)
-
-### Setup
+The weights (~500 MB) are not stored in this repository. To reproduce them, run the training script (about 35–40 minutes on a Colab T4) and place the output folder at `data/models/codebert-vulnerability-detector`. To experiment with it:
 
 ```bash
-git clone https://github.com/Dhanushhuu/codeguardian
-cd codeguardian
-
-# Create virtual environment
-python -m venv venv
-venv\Scripts\activate          # Windows
-# source venv/bin/activate     # Mac/Linux
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Configure environment
-cp .env.example .env
-# Edit .env — add GROQ_API_KEY and GITHUB_TOKEN
+USE_FINETUNED_MODEL=true
 ```
 
-### Run
+**Planned:** fine-tune on a Python vulnerability dataset with project-level train/test splits and re-run the same benchmark.
+
+---
+
+## Quick start
+
+```bash
+git clone https://github.com/Dhanushhuu/codeguardian.git
+cd codeguardian
+python -m venv venv
+source venv/bin/activate          # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+cp .env.example .env              # then fill in your keys
+```
+
+Minimum configuration in `.env`:
+
+```bash
+GROQ_API_KEY=<your Groq API key>
+USE_FINETUNED_MODEL=false         # keep off: CodeBERT does not transfer to Python
+```
+<!-- VERIFY: confirm .env.example exists and document the other variables (GitHub token, webhook secret, ...) with their real names. -->
+
+### Start the API
 
 ```bash
 # Start the API server
 uvicorn api.main:app --reload --port 8000
 
-# In a new terminal — run a review
+# In a new terminal: run a review
 python run_review.py
 
-# Open Swagger UI
+# Interactive API docs (Swagger UI)
 # http://localhost:8000/docs
 ```
 
-### Frontend
+### Start the frontend
 
 ```bash
 cd frontend
@@ -224,7 +141,7 @@ npm run dev
 # Open http://localhost:5173
 ```
 
-### Test
+### Run the tests
 
 ```bash
 # Tool-level tests (no API key needed)
@@ -234,116 +151,61 @@ python tests/test_pipeline.py --tools-only
 python tests/test_pipeline.py
 ```
 
+Notes: Semgrep's native Windows support is limited, so Linux, macOS, or WSL is recommended. Code submitted for review is sent to a third-party LLM provider (Groq); do not submit proprietary code you are not allowed to share.
+
 ---
 
-## 📡 API Reference
+## Reproducing the evaluation
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/` | Health check |
-| `POST` | `/review` | Submit code for manual review |
-| `GET` | `/status/{id}` | Job status + live event log |
-| `GET` | `/stream/{id}` | SSE stream of agent activity |
-| `GET` | `/results/{id}` | Full JSON report |
-| `GET` | `/results/{id}/pdf` | Download PDF report |
-| `POST` | `/webhook/github` | GitHub PR webhook receiver |
-
-**Example:**
+See [EVALUATION.md, section 5](EVALUATION.md#5-reproducing-these-results). In short:
 
 ```bash
-python run_review.py
-# Submits vulnerable_example.py and polls for results
-# Saves full report to review_result.json
+python evaluation/eval_ablation.py --model-dir <path to CodeBERT folder> --out evaluation/results
+python evaluation/codebert_controls.py --model-dir <path to CodeBERT folder>
 ```
 
 ---
 
-## 🛠 Tech Stack — Total Cost: $0
+## Known limitations
 
-| Component | Technology | Why |
-|---|---|---|
-| **Agent Framework** | LangGraph | Parallel fan-out, state management |
-| **LLM** | Groq — LLaMA 3.3 70B | Free tier, fastest inference (~200 tok/s) |
-| **Python Security** | Bandit | 68 checks, CWE + OWASP mapping |
-| **Multi-lang Security** | Semgrep | 1000+ maintained community rules |
-| **ML Classifier** | CodeBERT (microsoft) | Function-level vulnerability detection |
-| **ML Dataset** | CodeXGLUE Defect Detection | 21,854 labeled C functions |
-| **Code Quality** | Radon | Cyclomatic complexity + maintainability index |
-| **GitHub Integration** | PyGithub + Webhooks | PR comment posting |
-| **PDF Reports** | ReportLab | Audit-ready PDF generation |
-| **Backend** | FastAPI + SSE | Async, streaming, auto-docs |
-| **Frontend** | React + Vite | Dark dashboard, live event log |
+- The Python benchmark is small (48 snippets), hand-written, and not representative of real repositories; there is no JS/TS evaluation yet.
+- Rule-based tools miss semantic flaws (authorization, IDOR, SSRF and similar). No component has been shown to catch them reliably.
+- LLM triage is unevaluated. It reads untrusted code, so prompt injection through code comments is a risk that has not been tested.
+- Fixes are validated for syntax only, not for whether they remove the finding.
+- Findings reported by several layers for the same line may be duplicated in the output.
+- CodeBERT does not transfer from C to Python (see above).
+- Generated tests have not been evaluated.
+
+## Roadmap
+
+1. Score the full pipeline (LLM triage, fixes, test generation) on the labelled benchmark and fill the TBD cells in `EVALUATION.md`.
+2. De-duplicate findings by file, line, and weakness type; recalibrate severities.
+3. Re-scan patched code after each fix and report how many fixes actually clear the finding.
+4. Test the LLM triage against prompt injection; never let it suppress high-severity findings on its own.
+5. Fine-tune a Python-capable classifier with project-level splits and re-run the benchmark.
+6. Add CI and unit tests for each agent; pin dependency versions.
 
 ---
 
-## 📁 Project Structure
+## Repository layout (files added by the evaluation work)
 
 ```
-codeguardian/
-├── agents/
-│   ├── parser_agent.py        # File parsing + AST function extraction
-│   ├── security_agent.py      # 3-layer parallel scan + LLM enrichment
-│   ├── quality_agent.py       # Radon + AST + LLM quality review
-│   ├── fix_agent.py           # Template-guided fixes + ast.parse() validation
-│   ├── test_writer_agent.py   # pytest/jest test generation
-│   └── reviewer_agent.py      # Verdict + GitHub PR comment + PDF report
-│
-├── tools/
-│   ├── pr_parser.py           # Language detection + AST function extraction
-│   ├── bandit_scanner.py      # Bandit with CWE + OWASP mapping
-│   ├── semgrep_scanner.py     # Multi-language Semgrep integration
-│   ├── codebert_classifier.py # CodeBERT base + fine-tuned inference
-│   └── quality_analyzer.py   # Radon CC/MI + AST quality checks
-│
-├── graph/
-│   ├── state.py               # ReviewState TypedDict (Annotated for parallel nodes)
-│   └── pipeline.py            # LangGraph graph — fan-out + fan-in
-│
-├── api/
-│   └── main.py                # FastAPI + webhook + SSE streaming + PDF download
-│
-├── frontend/
-│   └── src/App.jsx            # React dark dashboard with live agent log
-│
+├── README.md
+├── EVALUATION.md
+├── evaluation/
+│   ├── eval_ablation.py          # ablation + Python-transfer harness
+│   ├── codebert_controls.py      # control experiments for the transfer result
+│   └── results/                  # results.json / results.md from the runs
 ├── finetuning/
-│   └── train.py               # CodeBERT LoRA fine-tuning on CodeXGLUE
-│
-├── data/
-│   └── samples/
-│       └── vulnerable_example.py  # 9 deliberate vulnerabilities for testing
-│
-├── tests/
-│   └── test_pipeline.py       # Integration + tool-level tests
-│
-├── run_review.py              # Submit + poll script
-├── requirements.txt
-├── .env.example
-└── EVALUATION.md              # Real benchmark numbers after testing
+│   ├── train_codebert_fixed.py
+│   └── results/eval_results.json
+└── ...                           # existing application code
 ```
 
----
+## Author
 
-## 🔐 Environment Variables
+**Dhanush Kumar**. B.E. Artificial Intelligence & Machine Learning, G. Pulla Reddy Engineering College. GitHub: [Dhanushhuu](https://github.com/Dhanushhuu)
 
-```env
-# Required
-GROQ_API_KEY=your_groq_api_key          # console.groq.com (free)
-GITHUB_TOKEN=your_github_token           # Fine-grained, repo read + PR write
-GITHUB_WEBHOOK_SECRET=your_secret        # openssl rand -hex 32
+## License
 
-# Optional
-USE_FINETUNED_MODEL=false                # true after running finetuning/train.py
-CODEBERT_MODEL_PATH=data/models/codebert-vulnerability-detector
-REPORT_OUTPUT_DIR=data/reports
-LOG_LEVEL=INFO
-```
-
----
-
-<div align="center">
-
-**Built with LangGraph · Groq · Bandit · Semgrep · CodeBERT · FastAPI · React**
-
-*Final Year Project — B.E. Artificial Intelligence & Machine Learning — 2026*
-
-</div>
+MIT (add a `LICENSE` file to the repository).
